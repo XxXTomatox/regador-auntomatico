@@ -1,0 +1,307 @@
+================================================================================
+     DOCUMENTACIÓN DEL CÓDIGO: SISTEMA DE MONITOREO Y RIEGO AUTOMÁTICO
+================================================================================
+
+Autor: Angel Axel
+Fecha: 19-nov-2026
+Archivo: sistema_riego_automatico.ino
+Plataforma: Arduino
+
+
+================================================================================
+1. DESCRIPCIÓN GENERAL
+================================================================================
+
+Este código implementa un sistema inteligente de monitoreo y riego automático
+que integra tres componentes principales:
+
+  - Sensor DHT22: mide temperatura y humedad del ambiente.
+  - Sensor de humedad de tierra: determina si el suelo necesita agua.
+  - Báscula HX711: mide el peso de objetos (consumo de agua).
+
+El sistema controla automáticamente una bomba de agua basándose en la humedad
+del suelo, usando un mecanismo de HISTÉRESIS para evitar encendidos y apagados
+constantes.
+
+
+================================================================================
+2. LIBRERÍAS UTILIZADAS
+================================================================================
+
+  #include <DHT.h>
+  #include <DHT_U.h>
+  #include "HX711.h"
+
+  - DHT.h / DHT_U.h : Permiten leer el sensor de temperatura y humedad DHT22.
+  - HX711.h         : Controla el amplificador/conversor HX711 de la báscula.
+
+
+================================================================================
+3. DEFINICIÓN DE PINES Y CONSTANTES
+================================================================================
+
+3.1 SENSOR DHT22
+----------------
+  #define Type DHT22
+  int dhtPin = 2;
+  DHT HT(dhtPin, Type);
+
+  - Tipo de sensor: DHT22
+  - Conectado al pin digital 2
+  - Objeto "HT" usado para leer temperatura y humedad
+
+
+3.2 SENSOR DE TIERRA Y BOMBA
+-----------------------------
+  #define sensorTierra A0
+  #define motorPin 10
+
+  - sensorTierra: entrada analógica A0 del sensor de humedad del suelo.
+  - motorPin: pin digital 10 que controla el relé o transistor de la bomba.
+
+
+3.3 UMBRALES DE HUMEDAD (HISTÉRESIS)
+-------------------------------------
+  const int UMBRAL_ENCENDER = 35;
+  const int UMBRAL_APAGAR   = 45;
+  bool bombaEncendida = false;
+
+  - Si la humedad baja de 35%  -> se ENCIENDE la bomba.
+  - Si la humedad supera 45%   -> se APAGA la bomba.
+  - El margen de 10% es la HISTÉRESIS, que evita oscilaciones.
+  - bombaEncendida guarda el estado actual de la bomba.
+
+
+3.4 BÁSCULA HX711
+-----------------
+  const int LOADCELL_DOUT_PIN = 6;
+  const int LOADCELL_SCK_PIN  = 5;
+  HX711 scale;
+  const float FACTOR_CALIBRACION = -209.9429;
+
+  - DOUT (pin 6): línea de datos del HX711.
+  - SCK  (pin 5): línea de reloj del HX711.
+  - FACTOR_CALIBRACION: convierte lecturas crudas en gramos.
+    El signo negativo corrige la dirección de la fuerza.
+
+
+================================================================================
+4. FUNCIÓN setup()
+================================================================================
+
+Se ejecuta UNA SOLA VEZ al encender el Arduino. Inicializa todos los componentes.
+
+  void setup() {
+    Serial.begin(9600);
+    HT.begin();
+    pinMode(motorPin, OUTPUT);
+    digitalWrite(motorPin, LOW);
+    scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+    delay(1000);
+    scale.set_scale(FACTOR_CALIBRACION);
+    delay(2000);
+    scale.tare();
+    delay(2000);
+  }
+
+PASO A PASO:
+
+  1. Serial.begin(9600)      -> Inicia comunicación serial a 9600 baudios.
+  2. HT.begin()              -> Inicializa el sensor DHT22.
+  3. pinMode(motorPin,OUTPUT)-> Configura el pin de la bomba como salida.
+  4. digitalWrite(LOW)       -> Asegura que la bomba esté apagada al arrancar.
+  5. scale.begin(...)        -> Inicializa comunicación con el HX711.
+  6. scale.set_scale(...)    -> Aplica el factor de calibración.
+  7. scale.tare()            -> Tara la báscula (pone el peso actual a cero).
+  8. delay(2000)             -> Espera 2 s para que el DHT22 se estabilice.
+
+
+================================================================================
+5. FUNCIONES AUXILIARES
+================================================================================
+
+5.1 leerDHT22() - LECTURA DE TEMPERATURA Y HUMEDAD AMBIENTE
+------------------------------------------------------------
+  void leerDHT22() {
+    float celsius = HT.readTemperature();
+    float humedadAire = HT.readHumidity();
+
+    if (isnan(celsius) || isnan(humedadAire)) {
+      Serial.println("Error al leer el sensor DHT22");
+    } else {
+      Serial.print("Temperatura: ");
+      Serial.print(celsius);
+      Serial.println(" °C");
+      Serial.print("Humedad ambiente: ");
+      Serial.print(humedadAire);
+      Serial.println(" %");
+    }
+  }
+
+QUÉ HACE:
+  - Lee temperatura (°C) y humedad relativa (%) del aire.
+  - isnan() verifica si la lectura falló (NaN = "Not a Number").
+  - Si la lectura es válida, imprime ambos valores por el monitor serial.
+
+
+5.2 controlBomba() - CONTROL AUTOMÁTICO DEL RIEGO
+--------------------------------------------------
+  void controlBomba() {
+    int humedadTierra = map(analogRead(sensorTierra), 0, 1023, 100, 0);
+    humedadTierra = constrain(humedadTierra, 0, 100);
+
+    Serial.print("Humedad tierra: ");
+    Serial.print(humedadTierra);
+    Serial.println(" %");
+
+    if (!bombaEncendida && humedadTierra < UMBRAL_ENCENDER) {
+      digitalWrite(motorPin, HIGH);
+      bombaEncendida = true;
+      Serial.println(">>> Bomba ENCENDIDA (tierra seca)");
+    }
+    else if (bombaEncendida && humedadTierra > UMBRAL_APAGAR) {
+      digitalWrite(motorPin, LOW);
+      bombaEncendida = false;
+      Serial.println(">>> Bomba APAGADA (tierra húmeda)");
+    }
+
+    Serial.print("Estado bomba: ");
+    Serial.println(bombaEncendida ? "ENCENDIDA" : "APAGADA");
+  }
+
+CONVERSIÓN DE LA LECTURA ANALÓGICA:
+  - analogRead(A0) devuelve un valor entre 0 y 1023.
+  - map(..., 0, 1023, 100, 0) lo convierte a porcentaje invertido.
+  - constrain(..., 0, 100) fuerza el valor al rango 0-100.
+
+LÓGICA DE HISTÉRESIS:
+
+  +------------------------------------------+----------------------+
+  | CONDICIÓN                                | ACCIÓN               |
+  +------------------------------------------+----------------------+
+  | Bomba apagada y humedad < 35%            | ENCENDER bomba       |
+  | Bomba encendida y humedad > 45%          | APAGAR bomba         |
+  | Cualquier otro caso                      | Mantener estado      |
+  +------------------------------------------+----------------------+
+
+  ¿POR QUÉ HISTÉRESIS? Sin ella, si la humedad estuviera exactamente en 35%,
+  la bomba se encendería y apagaría sin parar. Con dos umbrales el sistema
+  es estable.
+
+
+5.3 leerBascula() - LECTURA DEL PESO
+-------------------------------------
+  void leerBascula() {
+    if (scale.is_ready()) {
+      float peso = scale.get_units(10);
+      peso = abs(peso);
+      if (peso < 1.0) peso = 0;
+
+      Serial.print("Peso: ");
+      Serial.print(peso, 1);
+      Serial.println(" g");
+    } else {
+      Serial.println("HX711 no responde. Revisa conexiones.");
+    }
+  }
+
+PASO A PASO:
+  1. scale.is_ready()       -> Verifica que el HX711 tenga lectura disponible.
+  2. scale.get_units(10)    -> Toma 10 lecturas y las promedia (reduce ruido).
+  3. abs(peso)              -> Convierte valores negativos a positivos.
+  4. if (peso < 1.0) peso=0 -> Filtro de ruido (menos de 1 g se considera 0).
+  5. Serial.print(peso, 1)  -> Imprime el peso con 1 decimal.
+
+
+================================================================================
+6. FUNCIÓN loop()
+================================================================================
+
+Se ejecuta CONTINUAMENTE mientras el Arduino esté encendido.
+
+  void loop() {
+    Serial.println("======= LECTURAS =======");
+    leerDHT22();
+    controlBomba();
+    leerBascula();
+    Serial.println("-----------------------");
+    delay(2000);
+  }
+
+CICLO DE OPERACIÓN (cada 2 segundos):
+  1. Imprime un separador visual.
+  2. Lee temperatura y humedad del aire.
+  3. Lee humedad del suelo y decide encender o apagar la bomba.
+  4. Lee el peso en la báscula.
+  5. Imprime otro separador.
+  6. Espera 2 segundos (delay(2000)) antes de repetir.
+
+
+================================================================================
+7. RESUMEN DEL FLUJO DEL SISTEMA
+================================================================================
+
+  +---------------------------------------------+
+  |  INICIO (setup)                             |
+  |  - Inicializa Serial, DHT22, bomba, HX711   |
+  |  - Tara la báscula                          |
+  +----------------------+----------------------+
+                         |
+                         v
+  +---------------------------------------------+
+  |  LOOP (cada 2 segundos)                     |
+  |                                             |
+  |  1. Leer temperatura y humedad del aire     |
+  |  2. Leer humedad del suelo                  |
+  |     - Si < 35% y bomba apagada -> ENCENDER  |
+  |     - Si > 45% y bomba encendida -> APAGAR  |
+  |  3. Leer peso de la báscula                 |
+  |  4. Esperar 2 segundos                      |
+  +---------------------------------------------+
+
+
+================================================================================
+8. CONEXIONES DE HARDWARE (RESUMEN)
+================================================================================
+
+  +---------------------+---------------+---------------------+
+  | COMPONENTE          | PIN ARDUINO   | TIPO                |
+  +---------------------+---------------+---------------------+
+  | DHT22 (datos)       | 2             | Digital             |
+  | Sensor de tierra    | A0            | Analógico           |
+  | Relé / Bomba        | 10            | Digital (salida)    |
+  | HX711 DOUT          | 6             | Digital             |
+  | HX711 SCK           | 5             | Digital             |
+  +---------------------+---------------+---------------------+
+
+
+================================================================================
+9. POSIBLES MEJORAS (OPCIONAL)
+================================================================================
+
+  1. Agregar un relé con lógica invertida: algunos módulos se activan con LOW.
+  2. Guardar datos en SD o enviar por WiFi para monitoreo remoto.
+  3. Añadir alarma por temperatura alta.
+  4. Usar millis() en lugar de delay() para un sistema más responsivo
+     (el delay(2000) bloquea la lectura durante 2 segundos).
+  5. Calibrar el sensor de tierra con mediciones reales
+     (seco al aire vs. sumergido en agua).
+
+
+================================================================================
+10. GLOSARIO RÁPIDO
+================================================================================
+
+  HISTÉRESIS  : Técnica que usa dos umbrales distintos para evitar oscilaciones.
+  TARA        : Poner la báscula a cero con el peso actual.
+  HX711       : Chip amplificador que convierte la señal de una celda de carga
+                en datos digitales.
+  DHT22       : Sensor digital de temperatura y humedad de alta precisión.
+  NaN         : "Not a Number", indica una lectura inválida.
+  map()       : Función de Arduino que reescala un número de un rango a otro.
+  constrain() : Limita un valor a un rango mínimo y máximo.
+
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================
