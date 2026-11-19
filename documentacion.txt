@@ -4,7 +4,7 @@
 
 Autor: Angel Axel
 Fecha: 19-nov-2026
-Archivo: sistema_riego_automatico.ino
+Archivo: proyecto_Final_plantas.ino
 Plataforma: Arduino
 
 
